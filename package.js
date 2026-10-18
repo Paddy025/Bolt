@@ -1,8 +1,15 @@
-bolt/
-├── session/          (auto-generated for auth credentials)
-├── plugins/          (holds individual command files)
-│   └── ping.js       (example command)
-├── package.json
-├── index.js
-├── pair.js
-└── commands.js
+{
+  "name": "bolt",
+  "version": "1.0.0",
+  "description": "Bolt WhatsApp Bot",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "pair": "node pair.js"
+  },
+  "dependencies": {
+    "@itsliaaa/baileys": "latest",
+    "pino": "^9.6.0"
+  }
+}
