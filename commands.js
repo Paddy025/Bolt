@@ -1,85 +1,77 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import chalk from "chalk";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import fs from 'fs';
+import path from 'path';
+import { pathToFileURL } from 'url';
+import chalk from 'chalk';
 
 export const commands = new Map();
-export const prefix = "."; // Default prefix for Bolt
 
 /**
- * Dynamically loads all command modules inside the plugins directory.
- * @param {string} pluginsDir - Directory containing plugins.
+ * Dynamically loads all .js files inside ./plugins
  */
-export async function loadPlugins(pluginsDir = "./plugins") {
-  const resolvedPath = path.resolve(__dirname, pluginsDir);
+export async function loadCommands(pluginDir = './plugins') {
+  commands.clear();
+  const dirPath = path.resolve(pluginDir);
 
-  if (!fs.existsSync(resolvedPath)) {
-    fs.mkdirSync(resolvedPath, { recursive: true });
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
   }
 
-  const files = fs.readdirSync(resolvedPath).filter((f) => f.endsWith(".js"));
-  commands.clear();
+  const files = fs.readdirSync(dirPath).filter((file) => file.endsWith('.js'));
 
   for (const file of files) {
-    const filePath = path.join(resolvedPath, file);
+    const filePath = path.join(dirPath, file);
     try {
-      // Use pathToFileURL to maintain valid ESM import paths across platforms
-      const module = await import(`${pathToFileURL(filePath).href}?update=${Date.now()}`);
-      const plugin = module.default || module;
+      // Bust module cache with timestamp query
+      const moduleUrl = `${pathToFileURL(filePath).href}?t=${Date.now()}`;
+      const plugin = await import(moduleUrl);
 
-      if (plugin?.name && typeof plugin?.execute === "function") {
-        commands.set(plugin.name.toLowerCase(), plugin);
+      if (plugin.default && plugin.default.name && typeof plugin.default.execute === 'function') {
+        commands.set(plugin.default.name.toLowerCase(), plugin.default);
 
-        if (Array.isArray(plugin.aliases)) {
-          plugin.aliases.forEach((alias) => commands.set(alias.toLowerCase(), plugin));
+        // Add aliases if present
+        if (Array.isArray(plugin.default.aliases)) {
+          plugin.default.aliases.forEach((alias) => {
+            commands.set(alias.toLowerCase(), plugin.default);
+          });
         }
-
-        console.log(chalk.green(`[PLUGIN LOADED] » ${plugin.name}`));
-      } else {
-        console.log(chalk.red(`[SKIPPED] » ${file} (missing 'name' or 'execute' function)`));
       }
     } catch (err) {
-      console.error(chalk.red(`[ERROR LOADING] » ${file}:`), err);
+      console.error(chalk.red(`Error loading plugin ${file}:`), err);
     }
   }
 
-  console.log(chalk.cyan(`[BOLT] Total commands loaded: ${commands.size}`));
+  console.log(chalk.blue(`[BOLT] Loaded ${commands.size} commands/aliases.`));
 }
 
 /**
- * Message handler that inspects messages and routes matching commands.
+ * Handles incoming messages and executes matching plugin
  */
 export async function handleMessages(sock, m) {
-  const message = m.messages[0];
-  if (!message || !message.message || message.key.fromMe) return;
-
-  // Extract text body from various message wrappers
-  const body =
-    message.message?.conversation ||
-    message.message?.extendedTextMessage?.text ||
-    message.message?.imageMessage?.caption ||
-    message.message?.videoMessage?.caption ||
-    "";
-
-  if (!body.startsWith(prefix)) return;
-
-  const args = body.slice(prefix.length).trim().split(/ +/);
-  const cmdName = args.shift().toLowerCase();
-
-  const command = commands.get(cmdName);
-  if (!command) return;
-
-  const jid = message.key.remoteJid;
-
   try {
-    await command.execute({ sock, message, args, body, prefix });
+    const msg = m.messages[0];
+    if (!msg || !msg.message || msg.key.fromMe) return;
+
+    const jid = msg.key.remoteJid;
+    const body =
+      msg.message.conversation ||
+      msg.message.extendedTextMessage?.text ||
+      msg.message.imageMessage?.caption ||
+      msg.message.videoMessage?.caption ||
+      '';
+
+    const prefix = '.';
+    if (!body.startsWith(prefix)) return;
+
+    const args = body.slice(prefix.length).trim().split(/\s+/);
+    const commandName = args.shift()?.toLowerCase();
+
+    if (!commandName) return;
+
+    const command = commands.get(commandName);
+    if (command) {
+      await command.execute({ sock, msg, jid, args, body });
+    }
   } catch (error) {
-    console.error(chalk.red(`[EXECUTION ERROR] » ${cmdName}:`), error);
-    await sock.sendMessage(jid, {
-      text: `❌ Error executing command *${cmdName}*: ${error.message}`,
-    }, { quoted: message });
+    console.error(chalk.red('[BOLT] Command execution error:'), error);
   }
 }
