@@ -1,10 +1,11 @@
 {
   "name": "bolt",
   "version": "1.0.0",
-  "description": "WhatsApp Bot powered by Baileys",
+  "description": "WhatsApp bot powered by @itsliaaa/baileys",
   "main": "index.js",
   "type": "module",
   "scripts": {
+    "pair": "node pair.js",
     "start": "node index.js"
   },
   "dependencies": {
