@@ -1,63 +1,50 @@
-import makeWASocket, {
-  useMultiFileAuthState,
-  DisconnectReason,
-  fetchLatestBaileysVersion
-} from '@itsliaaa/baileys';
-import pino from 'pino';
-import chalk from 'chalk';
+import startPair from './pair.js';
+import { loadCommands, handleCommand } from './commands.js';
+import { makeWASocket, useMultiFileAuthState } from "@itsliaaa/baileys";
+import pino from "pino";
+import chalk from "chalk";
 import fs from 'fs';
-import { loadCommands, handleMessages } from './commands.js';
 
 async function startBolt() {
-  if (!fs.existsSync('./session/creds.json')) {
-    console.log(chalk.red('No session found! Please pair first by running:'));
-    console.log(chalk.yellow('npm run pair'));
-    process.exit(1);
-  }
+    console.log(chalk.cyan("Starting Bolt WhatsApp Bot..."));
+    
+    // Load plugin commands first
+    await loadCommands();
 
-  console.log(chalk.yellow('⚡ Starting Bolt WhatsApp Bot...'));
-
-  // 1. Load command plugins
-  await loadCommands('./plugins');
-
-  // 2. Initialize connection
-  const { state, saveCreds } = await useMultiFileAuthState('./session');
-  const { version } = await fetchLatestBaileysVersion();
-
-  const sock = makeWASocket({
-    version,
-    logger: pino({ level: 'silent' }),
-    printQRInTerminal: false,
-    auth: state,
-    browser: ['Bolt Bot', 'Chrome', '1.0.0']
-  });
-
-  sock.ev.on('creds.update', saveCreds);
-
-  // 3. Connection lifecycle
-  sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect } = update;
-
-    if (connection === 'close') {
-      const reason = lastDisconnect?.error?.output?.statusCode;
-      console.log(chalk.yellow(`Connection closed. Reason: ${reason}`));
-
-      if (reason !== DisconnectReason.loggedOut) {
-        console.log(chalk.cyan('Reconnecting Bolt...'));
-        startBolt();
-      } else {
-        console.log(chalk.red('Session logged out. Run `npm run pair` again.'));
-        process.exit(1);
-      }
-    } else if (connection === 'open') {
-      console.log(chalk.green('⚡ Bolt is online and connected!'));
+    const { state, saveCreds } = await useMultiFileAuthState("./session");
+    
+    // If session doesn't exist, trigger pairing flow
+    if (!fs.existsSync('./session/creds.json') || !state.creds.registered) {
+        await startPair();
+        return;
     }
-  });
 
-  // 4. Route incoming messages
-  sock.ev.on('messages.upsert', async (chatUpdate) => {
-    await handleMessages(sock, chatUpdate);
-  });
+    const sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: false,
+        logger: pino({ level: "fatal" })
+    });
+
+    sock.ev.on("creds.update", saveCreds);
+
+    sock.ev.on("connection.update", async (update) => {
+        const { connection, lastDisconnect } = update;
+        if (connection === "open") {
+            console.log(chalk.green("Bolt is online and listening for messages!"));
+        } else if (connection === "close") {
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== 401;
+            if (shouldReconnect) {
+                console.log(chalk.yellow("Reconnecting Bolt..."));
+                startBolt();
+            }
+        }
+    });
+
+    sock.ev.on("messages.upsert", async ({ messages }) => {
+        const mek = messages[0];
+        if (!mek.message || mek.key.fromMe) return;
+        await handleCommand(sock, mek);
+    });
 }
 
 startBolt();
