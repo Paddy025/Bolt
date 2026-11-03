@@ -1,77 +1,48 @@
 import fs from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
-import chalk from 'chalk';
 
-export const commands = new Map();
+const commands = new Map();
 
-/**
- * Dynamically loads all .js files inside ./plugins
- */
-export async function loadCommands(pluginDir = './plugins') {
-  commands.clear();
-  const dirPath = path.resolve(pluginDir);
-
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
-
-  const files = fs.readdirSync(dirPath).filter((file) => file.endsWith('.js'));
-
-  for (const file of files) {
-    const filePath = path.join(dirPath, file);
-    try {
-      // Bust module cache with timestamp query
-      const moduleUrl = `${pathToFileURL(filePath).href}?t=${Date.now()}`;
-      const plugin = await import(moduleUrl);
-
-      if (plugin.default && plugin.default.name && typeof plugin.default.execute === 'function') {
-        commands.set(plugin.default.name.toLowerCase(), plugin.default);
-
-        // Add aliases if present
-        if (Array.isArray(plugin.default.aliases)) {
-          plugin.default.aliases.forEach((alias) => {
-            commands.set(alias.toLowerCase(), plugin.default);
-          });
-        }
-      }
-    } catch (err) {
-      console.error(chalk.red(`Error loading plugin ${file}:`), err);
+export async function loadCommands() {
+    const pluginsDir = path.resolve('plugins');
+    if (!fs.existsSync(pluginsDir)) {
+        fs.mkdirSync(pluginsDir);
     }
-  }
 
-  console.log(chalk.blue(`[BOLT] Loaded ${commands.size} commands/aliases.`));
+    const files = fs.readdirSync(pluginsDir).filter(file => file.endsWith('.js'));
+    for (const file of files) {
+        const filePath = path.join(pluginsDir, file);
+        try {
+            const fileUrl = pathToFileURL(filePath).href;
+            const commandModule = await import(fileUrl);
+            if (commandModule.name && typeof commandModule.execute === 'function') {
+                commands.set(commandModule.name, commandModule);
+                console.log(`Loaded plugin command: ${commandModule.name}`);
+            }
+        } catch (err) {
+            console.error(`Failed to load plugin ${file}:`, err);
+        }
+    }
+    return commands;
 }
 
-/**
- * Handles incoming messages and executes matching plugin
- */
-export async function handleMessages(sock, m) {
-  try {
-    const msg = m.messages[0];
-    if (!msg || !msg.message || msg.key.fromMe) return;
-
-    const jid = msg.key.remoteJid;
-    const body =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text ||
-      msg.message.imageMessage?.caption ||
-      msg.message.videoMessage?.caption ||
-      '';
-
+export async function handleCommand(sock, mek) {
+    const messageContent = mek.message?.conversation || 
+                           mek.message?.extendedTextMessage?.text || '';
     const prefix = '.';
-    if (!body.startsWith(prefix)) return;
+    
+    if (!messageContent.startsWith(prefix)) return;
 
-    const args = body.slice(prefix.length).trim().split(/\s+/);
-    const commandName = args.shift()?.toLowerCase();
-
-    if (!commandName) return;
+    const args = messageContent.slice(prefix.length).trim().split(/ +/);
+    const commandName = args.shift().toLowerCase();
 
     const command = commands.get(commandName);
     if (command) {
-      await command.execute({ sock, msg, jid, args, body });
+        try {
+            await command.execute(sock, mek, args);
+        } catch (err) {
+            console.error(`Error executing command ${commandName}:`, err);
+        }
     }
-  } catch (error) {
-    console.error(chalk.red('[BOLT] Command execution error:'), error);
-  }
 }
